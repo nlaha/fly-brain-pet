@@ -1,8 +1,8 @@
 """Sensory and motor interfaces for the fly connectome.
 
-There is deliberately no ``if cursor_near: escape`` behavior rule here.
-The cursor is converted into a visual *looming* stimulus and injected into
-identified LC4/LPLC2 neurons.  Whether the fly escapes is then determined by
+There is deliberately no target-near -> escape behavior rule here.
+Visual input is converted into a retinal *looming* stimulus and injected into
+identified LC4/LPLC2 neurons. Whether the fly escapes is then determined by
 the simulated network: DNp01 (the Giant Fiber) is read as the escape command.
 
 The conversion from neural activity to desktop motion is necessarily a model:
@@ -21,66 +21,53 @@ def _wrap_angle(angle: float) -> float:
     return (angle + np.pi) % (2 * np.pi) - np.pi
 
 
-def looming_to_stimulus(
+def retina_to_stimulus(
     connectome: Connectome,
-    fly_pos: np.ndarray,
-    cursor_pos: np.ndarray,
-    heading: float,
-    previous_distance: float | None,
-    dt: float,
-    gain: float = 8.0,
+    retina: np.ndarray,
+    metadata: list[dict],
     device: str = "cpu",
-) -> tuple[torch.Tensor, dict[str, float]]:
-    """Convert cursor motion into directional looming input.
+    gain: float = 8.0,
+) -> torch.Tensor:
+    """Convert the fly's virtual retinal image into visual input.
 
-    LC4/LPLC2 are the identified looming-detector populations used by the
-    reference DesktopFly implementation.  The sensory transform is not an
-    escape rule: it only describes what the fly's visual system sees.
-
-    We model looming using both apparent proximity and positive approach rate.
-    A stationary cursor therefore produces little/no looming drive, while a
-    cursor rapidly approaching the fly produces a much stronger signal.
+    There is no target-specific escape rule here. The retinal image and its
+    temporal expansion are the sensory signal; the connectome decides what to
+    do with it.
     """
     stim = torch.zeros(connectome.n_neurons, device=device)
     idx = connectome.role_indices("looming")
+    if len(idx) == 0:
+        return stim
 
-    delta = cursor_pos - fly_pos
-    distance = float(np.linalg.norm(delta))
-    safe_distance = max(distance, 1.0)
+    looming = 0.0
+    left = 0.0
+    right = 0.0
+    for obj in metadata:
+        if not obj["visible"]:
+            continue
+        expansion = max(0.0, obj["expansion_rate"])
+        apparent = obj["apparent_radius"]
+        local = min(1.0, expansion / 0.30) * min(1.0, apparent / 0.25)
+        x = obj["retina_x"]
+        if x < 0.5:
+            left += local
+        else:
+            right += local
+        looming = max(looming, local)
 
-    previous = safe_distance if previous_distance is None else max(previous_distance, 1.0)
-    approach_speed = max(0.0, (previous - safe_distance) / max(dt, 1e-6))
+    total_visual = float(np.mean(retina))
+    left += total_visual * 0.05
+    right += total_visual * 0.05
 
-    # A finite visual field.  The two populations receive asymmetric drive,
-    # allowing downstream steering circuitry to carry spatial information.
-    angle = _wrap_angle(float(np.arctan2(delta[1], delta[0]) - heading))
-    front = max(0.0, math.cos(angle))
-    left = max(0.0, math.sin(angle))
-    right = max(0.0, -math.sin(angle))
-
-    # Apparent angular expansion grows rapidly as an object gets close.  The
-    # approach term is intentionally more important than static proximity.
-    proximity = min(1.0, 120.0 / safe_distance)
-    looming = min(1.0, approach_speed / 900.0) * (0.35 + 0.65 * front)
-    static_visual = 0.08 * proximity * front
-    total = gain * (looming + static_visual)
-
-    if len(idx):
-        sides = connectome.side[idx]
-        # LC4/LPLC2 side asymmetry preserves the location of the looming object.
-        drive = np.where(
-            sides < 0,
-            total * (0.35 + 0.65 * left),
-            np.where(sides > 0, total * (0.35 + 0.65 * right), total * 0.5),
-        )
-        stim[idx] = torch.as_tensor(drive, dtype=torch.float32, device=device)
-
-    return stim, {
-        "distance": safe_distance,
-        "approach_speed": approach_speed,
-        "looming": float(looming),
-        "angle": angle,
-    }
+    sides = connectome.side[idx]
+    drive = np.where(
+        sides < 0, gain * left,
+        np.where(sides > 0, gain * right, gain * 0.5 * (left + right)),
+    )
+    stim[idx] = torch.as_tensor(
+        np.clip(drive, 0.0, 50.0), dtype=torch.float32, device=device
+    )
+    return stim
 
 
 def _population_rate(connectome: Connectome, rates: torch.Tensor, role: str) -> tuple[float, float, float]:

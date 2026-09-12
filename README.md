@@ -103,3 +103,12 @@ DesktopFly: cursor approach drives the real looming pathway and the escape
 command comes from the simulated Giant Fiber, rather than a hand-written
 proximity state machine. See the upstream project for the biological circuit
 selection and rationale.
+
+
+### Controls
+- Close the overlay window to exit cleanly.
+- Press Ctrl+C in the terminal to request a clean Qt shutdown.
+- The cursor is not part of the visual environment; flies currently see other flies only.
+
+### GPU memory
+All flies share one immutable connectome adjacency tensor on the GPU. Each fly only owns its own neural state and scratch/input buffers. The simulator runs under `torch.inference_mode()` and reuses those buffers to avoid autograd graphs and per-frame tensor allocations.
