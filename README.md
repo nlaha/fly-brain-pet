@@ -112,3 +112,9 @@ selection and rationale.
 
 ### GPU memory
 All flies share one immutable connectome adjacency tensor on the GPU. Each fly only owns its own neural state and scratch/input buffers. The simulator runs under `torch.inference_mode()` and reuses those buffers to avoid autograd graphs and per-frame tensor allocations.
+
+
+### Performance
+The brains share one immutable sparse connectome and advance as a batch of independent neural states. Motor decoding is also batched on-device and only a tiny command tensor is copied back to the CPU. The overlay uses a zero-interval Qt timer so it does not add a fixed 16 ms sleep after each expensive brain update; measured frame time therefore reflects the actual simulation cost.
+
+Normal locomotion is generated downstream of the brain: DNp09 activity drives propulsion and DNa01/DNa02 activity drives heading. A small stochastic background is injected at those neural command populations to model spontaneous motor variability; there is no physics-side random steering.

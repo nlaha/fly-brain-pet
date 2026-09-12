@@ -1,22 +1,19 @@
-"""A small 2.5-D compound-eye model used to turn the desktop world into vision.
+"""Coarse 2.5-D panoramic compound-eye model.
 
-The desktop is the XY plane, while distance from the fly acts as virtual depth.
-Targets are projected onto a coarse panoramic retina.  The brain never receives
-a distance value; it receives retinal intensity and temporal expansion.
+Targets are projected into angular retina coordinates. Their apparent angular
+size and change in angular size provide the temporal looming cue. No distance
+or target-specific escape command is passed to the brain.
 """
 from __future__ import annotations
-
 import math
 import numpy as np
 import torch
-
 from .connectome import Connectome
 
-
-RETINA_WIDTH = 72
-RETINA_HEIGHT = 8
-HALF_FOV = math.radians(150.0)  # 300 degree panoramic field
-TARGET_FLY_RADIUS = 5.0
+RETINA_WIDTH = 144
+RETINA_HEIGHT = 10
+HALF_FOV = math.radians(150.0)  # 300 degrees
+TARGET_FLY_RADIUS = 6.0
 
 
 def wrap_angle(a: float) -> float:
@@ -24,25 +21,41 @@ def wrap_angle(a: float) -> float:
 
 
 def _retina_x(angle: float) -> float | None:
-    """Map relative angle to [0, 1], or None outside the visual field."""
     if abs(angle) > HALF_FOV:
         return None
     return (angle + HALF_FOV) / (2.0 * HALF_FOV)
 
 
-def project_target(fly_pos, heading, target_pos, target_radius, previous):
+def project_target(fly_pos, heading, target_pos, target_radius, previous, dt: float):
     delta = np.asarray(target_pos, dtype=np.float64) - np.asarray(fly_pos, dtype=np.float64)
-    distance = float(np.linalg.norm(delta))
-    if distance < 1e-6:
-        distance = 1e-6
+    distance = max(float(np.linalg.norm(delta)), 1e-6)
     angle = wrap_angle(math.atan2(delta[1], delta[0]) - heading)
 
     x = _retina_x(angle)
+    # Preserve the real angular size all the way out to long range.  A floor
+    # here would make distant targets stop producing temporal expansion until
+    # they got close enough to cross that artificial threshold.
     apparent_radius = math.atan2(target_radius, distance)
-    previous_radius = apparent_radius if previous is None else float(previous)
-    expansion = max(0.0, (apparent_radius - previous_radius))
-    # Convert angular expansion to a convenient per-frame scale.
-    expansion_rate = expansion * 60.0
+    if isinstance(previous, dict):
+        previous_radius = float(previous.get("apparent_radius", apparent_radius))
+        previous_angle = float(previous.get("angle", angle))
+        previous_distance = float(previous.get("distance", distance))
+    elif previous is None:
+        previous_radius = apparent_radius
+        previous_angle = angle
+        previous_distance = distance
+    else:
+        previous_radius = float(previous)
+        previous_angle = angle
+        previous_distance = distance
+
+    expansion = max(0.0, apparent_radius - previous_radius)
+    expansion_rate = expansion / max(previous_radius, 1e-9)
+    angular_velocity = wrap_angle(angle - previous_angle)
+    # Use the actual simulation timestep; render frequency is not necessarily 60 Hz.
+    # A first observation has previous_distance == distance, so it cannot create
+    # a spurious closing-speed spike.
+    closing_speed = max(0.0, (previous_distance - distance) / max(float(dt), 1e-6))
 
     return {
         "distance": distance,
@@ -50,87 +63,90 @@ def project_target(fly_pos, heading, target_pos, target_radius, previous):
         "retina_x": x,
         "apparent_radius": apparent_radius,
         "expansion_rate": expansion_rate,
+        "angular_velocity": angular_velocity,
+        "closing_speed": closing_speed,
         "visible": x is not None,
     }
 
 
 def render_retina(targets: list[dict], previous_by_id: dict, dt: float):
-    """Render target silhouettes onto a coarse panoramic retina.
-
-    Returns intensity [height,width] plus target metadata. This is deliberately
-    an image-like representation: downstream code can be replaced by a richer
-    photoreceptor/Lamina model later without changing world physics.
-    """
     retina = np.zeros((RETINA_HEIGHT, RETINA_WIDTH), dtype=np.float32)
     metadata = []
+    xs = np.arange(RETINA_WIDTH, dtype=np.float32)
+    ys = np.linspace(-1.0, 1.0, RETINA_HEIGHT, dtype=np.float32)
+    vertical = np.exp(-0.5 * (ys / 0.62) ** 2)
 
     for target in targets:
-        p = project_target(
-            target["fly_pos"], target["heading"], target["pos"],
-            target["radius"], previous_by_id.get(target["id"]),
-        )
+        p = project_target(target["fly_pos"], target["heading"], target["pos"],
+                           target["radius"], previous_by_id.get(target["id"]), dt)
         metadata.append({**p, "id": target["id"], "kind": target["kind"]})
-        previous_by_id[target["id"]] = p["apparent_radius"]
+        previous_by_id[target["id"]] = {"apparent_radius": p["apparent_radius"], "angle": p["angle"], "distance": p["distance"]}
         if not p["visible"]:
             continue
 
         cx = p["retina_x"] * (RETINA_WIDTH - 1)
-        # A projected object's angular diameter occupies multiple receptors.
         width = max(1.0, (2.0 * p["apparent_radius"]) / (2.0 * HALF_FOV) * RETINA_WIDTH)
-        sigma = max(0.9, width * 0.55)
-        xs = np.arange(RETINA_WIDTH, dtype=np.float32)
+        sigma = max(0.75, width * 0.55)
         profile = np.exp(-0.5 * ((xs - cx) / sigma) ** 2)
-
-        # A crude vertical compound-eye profile: stronger in the middle rows.
-        ys = np.linspace(-1.0, 1.0, RETINA_HEIGHT)
-        vertical = np.exp(-0.5 * (ys / 0.55) ** 2)
         retina += vertical[:, None] * profile[None, :]
 
     np.clip(retina, 0.0, 1.0, out=retina)
     return retina, metadata
 
 
-def vision_to_stimulus(connectome: Connectome, retina: np.ndarray, metadata: list[dict],
-                        device="cpu", gain: float = 8.0):
-    """Convert retinal activity to directional looming-detector input.
-
-    This is the sensory interface only. It does not decide to escape. The
-    connectome receives stronger activity on the side where the retinal image
-    is expanding and leaves the motor decision to its downstream circuitry.
-    """
-    stim = torch.zeros(connectome.n_neurons, device=device)
+def vision_drive(connectome: Connectome, retina: np.ndarray, metadata: list[dict], gain: float = 20.0):
+    """Return (looming neuron indices, drives) without allocating an N-neuron GPU tensor."""
     idx = connectome.role_indices("looming")
     if len(idx) == 0:
-        return stim
+        return idx, np.empty(0, dtype=np.float32)
 
-    # Per-target temporal expansion is the looming cue. Static nearby objects
-    # still produce a weak visual response, but do not automatically trigger it.
-    looming = 0.0
-    left = 0.0
-    right = 0.0
+    left = right = 0.0
     for m in metadata:
         if not m["visible"]:
             continue
-        x = m["retina_x"]
         expansion = max(0.0, m["expansion_rate"])
         apparent = m["apparent_radius"]
-        local = min(1.0, expansion / 0.30) * min(1.0, apparent / 0.25)
-        # Retinal position controls which side gets stronger drive.
+        angular_speed = abs(m.get("angular_velocity", 0.0))
+        distance = m["distance"]
+
+        # LC4 is velocity-sensitive while LPLC2 is sensitive to the terminal
+        # size of a loom. We therefore preserve both cues: fractional radial
+        # expansion plus retinal motion. A close fly crossing the visual field
+        # can now drive the same visual pathway even when its size does not
+        # increase monotonically from one frame to the next.
+        expansion_term = min(1.0, expansion / 0.004)
+        motion_term = min(1.0, angular_speed / 0.035)
+        closing_term = min(1.0, m.get("closing_speed", 0.0) / 180.0)
+        size_term = min(1.0, apparent / 0.035)
+        # Keep a long visual horizon: distant targets are weak, but never
+        # abruptly disappear. Fast lateral crossings and closing motion both
+        # remain visible to the looming pathway.
+        proximity = 1.0 / (1.0 + distance / 450.0)
+        local = expansion_term * (0.30 + 0.70 * size_term)
+        local += motion_term * proximity * 0.65
+        local += closing_term * proximity * 0.75
+        x = m["retina_x"]
+        angle_weight = 0.55 + 0.45 * math.cos((x - 0.5) * math.pi)
+        local *= angle_weight
         if x < 0.5:
             left += local
         else:
             right += local
-        looming = max(looming, local)
 
-    # The retina itself also supplies weak spatial visual drive.
     total_visual = float(np.mean(retina))
-    left += total_visual * 0.05
-    right += total_visual * 0.05
-
+    left += total_visual * 0.03
+    right += total_visual * 0.03
     sides = connectome.side[idx]
-    drive = np.where(
-        sides < 0, gain * left,
-        np.where(sides > 0, gain * right, gain * 0.5 * (left + right)),
-    )
-    stim[idx] = torch.as_tensor(np.clip(drive, 0.0, 50.0), dtype=torch.float32, device=device)
+    drive = np.where(sides < 0, gain * left,
+                     np.where(sides > 0, gain * right, gain * 0.5 * (left + right)))
+    return idx, np.clip(drive, 0.0, 50.0).astype(np.float32)
+
+
+def vision_to_stimulus(connectome: Connectome, retina: np.ndarray, metadata: list[dict],
+                        device="cpu", gain: float = 8.0):
+    """Compatibility wrapper; use vision_drive in the batched simulator."""
+    stim = torch.zeros(connectome.n_neurons, device=device)
+    idx, drive = vision_drive(connectome, retina, metadata, gain=gain)
+    if len(idx):
+        stim[torch.as_tensor(idx, dtype=torch.long, device=device)] = torch.as_tensor(drive, device=device)
     return stim

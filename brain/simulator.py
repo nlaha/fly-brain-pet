@@ -1,42 +1,54 @@
-"""
-Leaky-rate simulation over the connectome's sparse adjacency matrix.
-r' = (-r + relu(W @ r + I_ext)) / tau
-
-Sparse mm is used every step so this scales to the full ~166k-neuron
-graph on GPU; on CPU it'll still run, just slower per step (use
-build_curated_subgraph for a CPU-friendly size).
-"""
+"""GPU-efficient batched leaky-rate simulation over the full connectome."""
+from __future__ import annotations
 import torch
-
 from .connectome import Connectome
 
 
-class LeakyRateSimulator:
-    def __init__(self, connectome: Connectome, tau: float = 10.0, dt: float = 1.0, device: str = "cpu"):
+class BatchedLeakyRateSimulator:
+    """N independent brain states sharing one immutable sparse connectome.
+
+    State is [neurons, flies], so one sparse-dense matmul advances every brain
+    together. The graph and weights are not duplicated.
+    """
+    def __init__(self, connectome: Connectome, batch_size: int, tau: float = 10.0,
+                 dt: float = 1.0, device: str = "cpu", intrinsic_noise: float = 0.008):
         self.c = connectome
         self.device = device
         self.tau = tau
         self.dt = dt
-        # One persistent state vector per brain.  The connectome graph itself is
-        # shared by all flies; only this state is unique to each fly.
-        self.rates = torch.zeros(connectome.n_neurons, device=device, dtype=torch.float32)
+        self.batch_size = batch_size
+        self.intrinsic_noise = intrinsic_noise
+        shape = (connectome.n_neurons, batch_size)
+        self.rates = torch.zeros(shape, device=device, dtype=torch.float32)
         self.external_input = torch.zeros_like(self.rates)
         self._scratch = torch.empty_like(self.rates)
-        # Do not call .to() per fly: the Connectome already owns the device copy.
         self.adjacency = connectome.adjacency
+        # CSR generally uses less index storage than COO and is the preferred
+        # format for repeated sparse-matrix-vector/matrix products.
+        if device == "cuda" and getattr(self.adjacency, "layout", None) == torch.sparse_coo:
+            try:
+                self.adjacency = self.adjacency.to_sparse_csr()
+            except RuntimeError:
+                pass
 
-    def step(self, external_input: torch.Tensor) -> torch.Tensor:
-        """external_input: dense [n_neurons] tensor of injected drive (zeros
-        for neurons with no stimulus this step)."""
-        # Reuse buffers and disable autograd. This is inference, not training,
-        # so keeping an autograd graph would waste GPU memory every frame.
-        with torch.inference_mode():
-            synaptic = torch.sparse.mm(self.adjacency, self.rates.unsqueeze(1)).squeeze(1)
-            self._scratch.copy_(synaptic)
-            self._scratch.add_(external_input)
-            self._scratch.relu_()
-            self.rates.add_((self.dt / self.tau) * (-self.rates + self._scratch))
-            self.rates.clamp_(0.0, 50.0)
+    @torch.inference_mode()
+    def step(self) -> torch.Tensor:
+        synaptic = torch.sparse.mm(self.adjacency, self.rates)
+        self._scratch.copy_(synaptic)
+        # Stochasticity is modeled as rate-dependent synaptic bombardment,
+        # rather than injecting a fixed amount of activity into every neuron.
+        # This is a rate-model approximation of biological synaptic noise:
+        # active neurons get more variance, while silent neurons are not
+        # continuously kicked above threshold. It is not a calibrated model
+        # of Drosophila noise, so keep it deliberately small.
+        if self.intrinsic_noise > 0:
+            drive = self._scratch.clamp_min(0.0)
+            sigma = self.intrinsic_noise * torch.sqrt(drive + 1e-4)
+            self._scratch.add_(torch.randn_like(self._scratch) * sigma)
+        self._scratch.add_(self.external_input)
+        self._scratch.relu_()
+        self.rates.add_((self.dt / self.tau) * (-self.rates + self._scratch))
+        self.rates.clamp_(0.0, 50.0)
         return self.rates
 
     def reset(self):

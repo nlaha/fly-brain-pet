@@ -48,6 +48,13 @@ ROLE_PATTERNS = {
     "looming": re.compile(r"^(?:LC4|LPLC2)(?:\s|$)", re.I),
     "escape": re.compile(r"^DNp01(?:\s|$)", re.I),
     "steering": re.compile(r"^(?:DNa01|DNa02)(?:\s|$)", re.I),
+    # Additional descending steering neurons present in the Male CNS data.
+    # These provide a richer, transient flight-turn command population.
+    "flight_steering": re.compile(r"^(?:DNa01|DNa02|DNa11|DNg13|DNb01)(?:\s|$)", re.I),
+    # The connectome contains the experimentally identified bilateral DNb01
+    # saccade-command partner; DNae014 is not annotated in this Male CNS table.
+    "saccade_inhibitory": re.compile(r"^DNb01(?:\s|$)", re.I),
+    "saccade_excitory": re.compile(r"^(?:DNa01|DNa02)(?:\s|$)", re.I),
     "forward": re.compile(r"^DNp09(?:\s|$)", re.I),
     "escape_wing": re.compile(r"^(?:DNp02|DNp04|DNp11)(?:\s|$)", re.I),
 }
@@ -60,6 +67,7 @@ class Connectome:
     id_to_index: dict                  # bodyId -> index
     roles: dict = field(default_factory=dict)   # role -> bool mask (np.ndarray)
     side: np.ndarray = None            # +1 right, -1 left, 0 unknown
+    xyz: np.ndarray = None             # soma XYZ coordinates in connectome space
     adjacency: torch.Tensor = None      # sparse [n_neurons, n_neurons], signed weights
 
     def role_indices(self, role: str) -> np.ndarray:
@@ -123,6 +131,39 @@ def load_connectome(
         roles[role] = combined_label.str.contains(pattern).to_numpy()
 
     side = ann[COLUMN_MAP["side"]].map(_sign_from_side).to_numpy()
+
+    # Soma coordinates are present in the Male CNS annotations. Keep them as
+    # metadata only; they do not change the graph or neural weights. They let
+    # debug mode render the actual 3-D spatial distribution of active neurons.
+    xyz = np.zeros((n, 3), dtype=np.float32)
+    if "somaLocation" in ann.columns:
+        # somaLocation is not guaranteed to be a string: depending on the
+        # Feather/Arrow version it may contain Python lists, NumPy arrays,
+        # tuples, or scalar NaN values.  Do not coerce a missing value to the
+        # string "nan" and never pass floats directly to re.findall().
+        def _parse_xyz(value):
+            if value is None:
+                return None
+            if isinstance(value, (float, np.floating)) and not np.isfinite(value):
+                return None
+            if isinstance(value, (list, tuple, np.ndarray)):
+                try:
+                    vals = np.asarray(value, dtype=np.float32).reshape(-1)
+                    return vals[:3] if vals.size >= 3 and np.all(np.isfinite(vals[:3])) else None
+                except (TypeError, ValueError):
+                    return None
+            if isinstance(value, str):
+                nums = re.findall(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?", value)
+                if len(nums) >= 3:
+                    vals = np.asarray([float(nums[0]), float(nums[1]), float(nums[2])], dtype=np.float32)
+                    return vals if np.all(np.isfinite(vals)) else None
+            return None
+
+        for i, value in enumerate(ann["somaLocation"].to_numpy()):
+            parsed = _parse_xyz(value)
+            if parsed is not None:
+                xyz[i] = parsed
+
     lookup = _build_id_lookup(body_ids)
 
     # per-neuron excitatory(+1)/inhibitory(-1) sign, defaulting to excitatory
@@ -153,6 +194,7 @@ def load_connectome(
         id_to_index=id_to_index,
         roles=roles,
         side=side,
+        xyz=xyz,
         adjacency=adjacency,
     )
 
@@ -198,5 +240,6 @@ def build_curated_subgraph(full: Connectome, hops: int = 2) -> Connectome:
         id_to_index={full.body_ids[old]: new for old, new in remap.items()},
         roles={role: mask[keep_idx] for role, mask in full.roles.items()},
         side=full.side[keep_idx],
+        xyz=full.xyz[keep_idx],
         adjacency=sub_adjacency,
     )
