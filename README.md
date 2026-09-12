@@ -88,3 +88,18 @@ across multiple monitors with different scaling). Good enough for
   repeatedly in a loop.
 - The overlay sprite is a placeholder (three ellipses drawn in
   `pet/overlay.py`) — swap in a real sprite whenever.
+
+## Looming-driven escape
+
+The fly does **not** contain a scripted `cursor_near -> escape` behavior rule.
+The cursor is converted into a directional looming signal and injected into the
+identified **LC4/LPLC2** visual population. The connectome is then simulated;
+**DNp01 / Giant Fiber** activity is decoded as the escape command. A Giant
+Fiber threshold crossing gives the body a flight impulse, while the desktop
+physics layer handles velocity, drag, and screen boundaries.
+
+This follows the important architectural idea in DenisSergeevitch's
+DesktopFly: cursor approach drives the real looming pathway and the escape
+command comes from the simulated Giant Fiber, rather than a hand-written
+proximity state machine. See the upstream project for the biological circuit
+selection and rationale.

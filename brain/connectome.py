@@ -41,6 +41,15 @@ ROLE_PATTERNS = {
     # central complex isn't its own superclass — these are central-complex
     # cell type prefixes instead, matched against `type`
     "central_complex": re.compile(r"^(EPG|PEN|PFN|PFL|FB|EB|hDelta|PFR)\d*", re.I),
+    # Identified neurons in the looming -> escape pathway.  Keeping these
+    # separate from the broad visual/motor roles lets the I/O layer stimulate
+    # and read the circuit by biological identity rather than by a hand-written
+    # behavioral rule.
+    "looming": re.compile(r"^(?:LC4|LPLC2)(?:\s|$)", re.I),
+    "escape": re.compile(r"^DNp01(?:\s|$)", re.I),
+    "steering": re.compile(r"^(?:DNa01|DNa02)(?:\s|$)", re.I),
+    "forward": re.compile(r"^DNp09(?:\s|$)", re.I),
+    "escape_wing": re.compile(r"^(?:DNp02|DNp04|DNp11)(?:\s|$)", re.I),
 }
 
 
@@ -149,10 +158,14 @@ def load_connectome(
 
 
 def build_curated_subgraph(full: Connectome, hops: int = 2) -> Connectome:
-    """CPU fallback: keep only visual/CX/descending/motor neurons plus
-    anything within `hops` synapses of them, then re-index."""
+    """CPU fallback: keep the identified looming/escape/steering circuit
+    and anything within `hops` synapses of it, then re-index.
+
+    This is intentionally narrower than the old broad visual/motor cut: the
+    I/O layer stimulates LC4/LPLC2 and reads DNp01/DNa01/DNa02/DNp09/DNp02/04/11.
+    """
     keep = np.zeros(full.n_neurons, dtype=bool)
-    for role in ("visual", "central_complex", "descending", "motor"):
+    for role in ("looming", "escape", "steering", "forward", "escape_wing"):
         keep |= full.roles[role]
 
     adj = full.adjacency.coalesce()
