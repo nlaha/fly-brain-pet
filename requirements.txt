@@ -1,0 +1,7 @@
+torch
+pyarrow
+pandas
+numpy
+scipy
+PySide6
+pyautogui

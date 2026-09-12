@@ -1,0 +1,15 @@
+[project]
+name = "fly-pet"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "torch",
+    "pyarrow",
+    "pandas",
+    "numpy",
+    "scipy",
+    "PySide6",
+    "pyautogui",
+]
+
+[tool.uv]
