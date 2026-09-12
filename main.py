@@ -13,13 +13,14 @@ from pet.overlay import run_overlay
 DATA_DIR = Path(__file__).parent / "data" / "raw"
 ANNOTATIONS = DATA_DIR / "body-annotations-male-cns-v1.0-minconf-0.5.feather"
 WEIGHTS = DATA_DIR / "connectome-weights-male-cns-v1.0-minconf-0.5.feather"
+NEUROTRANSMITTERS = DATA_DIR / "body-neurotransmitters-male-cns-v1.0.feather"
 
 
 def build_state():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"device: {device}")
 
-    full = load_connectome(str(ANNOTATIONS), str(WEIGHTS), device=device)
+    full = load_connectome(str(ANNOTATIONS), str(WEIGHTS), nt_path=str(NEUROTRANSMITTERS), device=device)
     if device == "cuda":
         connectome = full
         print(f"running full connectome: {connectome.n_neurons} neurons")
