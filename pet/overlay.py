@@ -29,18 +29,124 @@ class FlyOverlay(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+
         painter.translate(*self.pos)
         painter.rotate(self.heading)
-        painter.setBrush(QColor(20, 20, 20, 230))
+
+        # -------------------------
+        # Colors
+        # -------------------------
+        body = QColor(45, 30, 25, 245)
+        abdomen = QColor(65, 40, 30, 245)
+        abdomen_dark = QColor(35, 25, 22, 245)
+
+        eye = QColor(150, 25, 35, 255)
+        eye_highlight = QColor(230, 90, 100, 220)
+
+        leg_color = QColor(30, 25, 23, 230)
+
+        wing = QColor(210, 225, 235, 80)
+        wing_outline = QColor(170, 190, 205, 110)
+
+        # -------------------------
+        # Legs
+        # -------------------------
+        painter.setPen(leg_color)
+        painter.setBrush(Qt.NoBrush)
+
+        # Rear legs
+        painter.drawLine(2, -2, 9, -8)
+        painter.drawLine(9, -8, 13, -7)
+
+        painter.drawLine(2, 2, 9, 8)
+        painter.drawLine(9, 8, 13, 7)
+
+        # Middle legs
+        painter.drawLine(-1, -2, 5, -9)
+        painter.drawLine(5, -9, 8, -10)
+
+        painter.drawLine(-1, 2, 5, 9)
+        painter.drawLine(5, 9, 8, 10)
+
+        # Front legs
+        painter.drawLine(-5, -2, -8, -7)
+        painter.drawLine(-8, -7, -11, -6)
+
+        painter.drawLine(-5, 2, -8, 7)
+        painter.drawLine(-8, 7, -11, 6)
+
+        # -------------------------
+        # Wings
+        # -------------------------
+        painter.setPen(wing_outline)
+        painter.setBrush(wing)
+
+        # Upper wing
+        painter.drawEllipse(-5, -14, 18, 11)
+
+        # Lower wing
+        painter.drawEllipse(-5, 3, 18, 11)
+
+        # Wing veins
+        painter.setPen(QColor(150, 170, 185, 90))
+        painter.drawLine(1, -9, 10, -11)
+        painter.drawLine(1, -8, 9, -5)
+
+        painter.drawLine(1, 9, 10, 11)
+        painter.drawLine(1, 8, 9, 5)
+
+        # -------------------------
+        # Abdomen
+        # -------------------------
         painter.setPen(Qt.NoPen)
-        painter.drawEllipse(-6, -3, 12, 6)   # body, placeholder sprite
-        painter.drawEllipse(-9, -4, 4, 3)    # left wing hint
-        painter.drawEllipse(-9, 1, 4, 3)     # right wing hint
+        painter.setBrush(abdomen)
+
+        # Slightly tapered abdomen
+        painter.drawEllipse(-2, -3, 15, 6)
+
+        # Abdomen stripes
+        painter.setBrush(abdomen_dark)
+        painter.drawRect(7, -2, 2, 4)
+        painter.drawRect(11, -2, 2, 4)
+
+        # -------------------------
+        # Thorax
+        # -------------------------
+        painter.setBrush(body)
+        painter.drawEllipse(-7, -4, 9, 8)
+
+        # -------------------------
+        # Head
+        # -------------------------
+        painter.drawEllipse(-11, -4, 7, 8)
+
+        # -------------------------
+        # Eyes
+        # -------------------------
+        painter.setBrush(eye)
+
+        painter.drawEllipse(-12, -4, 4, 4)
+        painter.drawEllipse(-12, 0, 4, 4)
+
+        # Tiny eye highlights
+        painter.setBrush(eye_highlight)
+        painter.drawEllipse(-11, -3, 1, 1)
+        painter.drawEllipse(-11, 1, 1, 1)
+
+        # -------------------------
+        # Antennae
+        # -------------------------
+        painter.setPen(QColor(25, 20, 18, 230))
+        painter.drawLine(-9, -3, -14, -7)
+        painter.drawLine(-14, -7, -16, -8)
+
+        painter.drawLine(-9, 3, -14, 7)
+        painter.drawLine(-14, 7, -16, 8)
+
         painter.end()
 
-
-def run_overlay(step_callback):
-    app = QApplication.instance() or QApplication([])
+def run_overlay(step_callback, app=None):
+    app = app or QApplication.instance() or QApplication([])
     screen = app.primaryScreen().size()
     overlay = FlyOverlay((screen.width(), screen.height()), step_callback)
     overlay.show()

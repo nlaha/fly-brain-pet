@@ -3,11 +3,12 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from PySide6.QtGui import QCursor
+from PySide6.QtWidgets import QApplication
 
 from brain.connectome import load_connectome, build_curated_subgraph
 from brain.simulator import LeakyRateSimulator
 from brain.io_mapping import cursor_to_stimulus, rates_to_motor_command
+from pet.cursor import get_cursor_provider
 from pet.overlay import run_overlay
 
 DATA_DIR = Path(__file__).parent / "data" / "raw"
@@ -17,6 +18,10 @@ NEUROTRANSMITTERS = DATA_DIR / "body-neurotransmitters-male-cns-v1.0.feather"
 
 
 def build_state():
+    app = QApplication.instance() or QApplication([])
+    screen = app.primaryScreen().size()
+    cursor_provider = get_cursor_provider((screen.width(), screen.height()))
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"device: {device}")
 
@@ -36,14 +41,15 @@ def build_state():
         "connectome": connectome,
         "sim": sim,
         "device": device,
+        "app": app,
+        "cursor_provider": cursor_provider,
     }
     return state
 
 
 def make_step_callback(state):
     def step():
-        qpos = QCursor.pos()
-        cursor = np.array([qpos.x(), qpos.y()])
+        cursor = np.array(state["cursor_provider"].position())
         stim = cursor_to_stimulus(
             state["connectome"], state["pos"], cursor, state["heading"], device=state["device"]
         )
@@ -60,4 +66,4 @@ def make_step_callback(state):
 
 if __name__ == "__main__":
     state = build_state()
-    run_overlay(make_step_callback(state))
+    run_overlay(make_step_callback(state), app=state["app"])

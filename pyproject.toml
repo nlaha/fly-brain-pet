@@ -9,6 +9,7 @@ dependencies = [
     "numpy",
     "scipy",
     "PySide6",
+    "evdev; sys_platform == 'linux'",
 ]
 
 [tool.uv]

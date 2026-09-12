@@ -23,9 +23,9 @@ newer dataset version and it changes.
 
 Run:
 ```
-uv run main.py               # X11 / most desktops
-QT_QPA_PLATFORM=xcb uv run main.py   # Wayland — see note below
+uv run main.py
 ```
+(add yourself to the `input` group first if you're on Wayland — see below)
 
 ## What's real vs. approximated
 - **Real**: neuron identities, the full weighted synaptic graph, and
@@ -51,21 +51,33 @@ automatically falls back to a curated visual+central-complex+descending
 +motor subgraph (`build_curated_subgraph`) on CPU, since a dense-ish
 sparse mm over the full graph every frame is not real-time on CPU.
 
-## Running on Wayland
-Native Wayland does not let a client read the global cursor position
-while also being click-through — that's an intentional Wayland
-restriction (X11 allows both at once via `XQueryPointer` + the shape
-extension; Wayland's security model forbids the former for
-surfaces that aren't receiving input). So this needs to run through
-XWayland:
+## Cursor tracking on Wayland
+Native Wayland deliberately blocks any client from reading the global
+pointer position — that's not a bug, it's the security model (X11
+allows it via `XQueryPointer`; Wayland doesn't have an equivalent for
+surfaces that aren't receiving input). `pet/cursor.py` sidesteps this
+by reading raw mouse motion from `/dev/input/event*` via `evdev`,
+which works identically under Wayland, X11, or any compositor.
+
+This needs read access to those device files — add yourself to the
+`input` group once:
+```
+sudo usermod -aG input $USER
+```
+then **log out and back in** (group membership doesn't apply to an
+already-running session). If that's not done yet, `main.py` will print
+a permission warning and fall back to Qt's `QCursor`, which only works
+if the whole app runs through XWayland:
 ```
 QT_QPA_PLATFORM=xcb uv run main.py
 ```
-If you still hit an Xlib/auth error with that set, XWayland's Xauthority
-isn't being picked up from your shell — check `echo $DISPLAY` and
-`echo $XAUTHORITY` in the same terminal you're launching from, and
-export them explicitly if they're empty (GNOME's XWayland auth file is
-usually under `/run/user/$(id -u)/.mutter-Xwaylandauth.*`).
+
+Note the evdev path only tracks *relative* motion (accumulated from
+mouse deltas, starting at screen center) — it's a virtual position, not
+a true query of where the OS cursor currently is, so it can drift from
+reality if the real cursor gets warped by something else (e.g. moving
+across multiple monitors with different scaling). Good enough for
+"something for the fly to react to"; not perfectly ground-truth.
 
 ## Known rough edges to expect on first run
 - First load will still take a bit: reading a 1.1GB feather file and
