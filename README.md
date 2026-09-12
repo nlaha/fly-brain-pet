@@ -43,3 +43,19 @@ uv run main.py
 automatically falls back to a curated visual+central-complex+descending
 +motor subgraph (`build_curated_subgraph`) on CPU, since a dense-ish
 sparse mm over the full graph every frame is not real-time on CPU.
+
+## Running on Wayland
+Native Wayland does not let a client read the global cursor position
+while also being click-through — that's an intentional Wayland
+restriction (X11 allows both at once via `XQueryPointer` + the shape
+extension; Wayland's security model forbids the former for
+surfaces that aren't receiving input). So this needs to run through
+XWayland:
+```
+QT_QPA_PLATFORM=xcb uv run main.py
+```
+If you still hit an Xlib/auth error with that set, XWayland's Xauthority
+isn't being picked up from your shell — check `echo $DISPLAY` and
+`echo $XAUTHORITY` in the same terminal you're launching from, and
+export them explicitly if they're empty (GNOME's XWayland auth file is
+usually under `/run/user/$(id -u)/.mutter-Xwaylandauth.*`).

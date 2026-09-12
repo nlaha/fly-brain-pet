@@ -2,8 +2,8 @@ import math
 from pathlib import Path
 
 import numpy as np
-import pyautogui
 import torch
+from PySide6.QtGui import QCursor
 
 from brain.connectome import load_connectome, build_curated_subgraph
 from brain.simulator import LeakyRateSimulator
@@ -41,7 +41,8 @@ def build_state():
 
 def make_step_callback(state):
     def step():
-        cursor = np.array(pyautogui.position())
+        qpos = QCursor.pos()
+        cursor = np.array([qpos.x(), qpos.y()])
         stim = cursor_to_stimulus(
             state["connectome"], state["pos"], cursor, state["heading"], device=state["device"]
         )
